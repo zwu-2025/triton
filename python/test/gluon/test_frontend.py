@@ -1302,7 +1302,6 @@ def amd_mfma_layout_kernel():
     mfma_layout: ttgl.constexpr = ttgl.AMDMFMALayout(version=4, instr_shape=[32, 32], transposed=True,
                                                      warps_per_cta=[4, 1], tiles_per_warp=[4, 1], ctas_per_cga=[1, 1],
                                                      cta_split_num=[1, 1], cta_order=[1, 0])
-
     layout: ttgl.constexpr = ttgl.BlockedLayout([1, 1], [1, 64], [4, 1], [1, 0])
 
     x = ttgl.full([128, 32], 0, ttgl.float32, layout)
@@ -1322,6 +1321,7 @@ def test_amd_mfma_layout(fresh_knobs):
     options = stub_backend.parse_options(options)
     codegen_fns = stub_backend.get_codegen_implementation(options)
     signature = {}
+
     src = GluonASTSource(fn=amd_mfma_layout_kernel, signature=signature)
     builder = ir.builder(context)
     module = builder.create_module()
