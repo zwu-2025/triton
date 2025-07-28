@@ -1468,7 +1468,8 @@ class TritonSemantic(Generic[TensorTy]):
         return getattr(ir.INPUT_PRECISION, input_precision)
 
     def dot(self, lhs: TensorTy, rhs: TensorTy, acc: TensorTy, input_precision: Optional[str],
-            max_num_imprecise_acc: int, out_dtype: tl.dtype) -> TensorTy:
+            max_num_imprecise_acc: int, out_dtype: tl.dtype, ret_type: Optional[TensorTy] = None) -> TensorTy:
+
         assert lhs.type.is_block() and rhs.type.is_block()
 
         if lhs.dtype.is_fp8() and rhs.dtype.is_fp8():
@@ -1540,7 +1541,13 @@ class TritonSemantic(Generic[TensorTy]):
         N = rhs.type.shape[-1]
         K = lhs.type.shape[-1]
         B = lhs.type.shape[0] if lhs_rank == 3 else None
-        ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
+
+        # to be compatible with the semantic of triton, an new optional parameter ret_type is introduced
+        # if ret_type is not none, which means the gluon semantic is used, then ret_ty is from this parameter
+        # or else, the ret_type will be constructed the same way as for now.
+        ret_ty = ret_type
+        if ret_type is None:
+            ret_ty = tl.block_type(ret_scalar_ty, [B, M, N] if B else [M, N])
         if acc is None:
             acc_handle = self.builder.create_splat(ret_ty.to_ir(self.builder), _0)
         else:

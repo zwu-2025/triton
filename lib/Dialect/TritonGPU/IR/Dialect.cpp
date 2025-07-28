@@ -2406,6 +2406,9 @@ struct TritonGPUInferLayoutInterface
         return emitOptionalError(
             location, "unexpected operand layout for NvidiaMmaEncodingAttr v3");
       }
+    } else if (auto mfmaEncoding =
+                   mlir::dyn_cast<AMDMfmaEncodingAttr>(retEncoding)) {
+      return success();
     } else if (auto dotOpEnc =
                    mlir::dyn_cast<DotOperandEncodingAttr>(operandEncoding)) {
       if (opIdx != dotOpEnc.getOpIdx())

@@ -311,6 +311,8 @@ def compile(src, target=None, options=None, _env_vars=None):
         ir_filename = f"{file_name}.source"
         metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)
 
+    assert module.verify()
+
     use_ir_loc = knobs.compilation.use_ir_loc
     if ir_source and use_ir_loc:
         module.create_location_snapshot(src.path)
