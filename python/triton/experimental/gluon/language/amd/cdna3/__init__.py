@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from triton import knobs
+
 from triton.experimental.gluon.language import _core as ttgl
 from triton._C.libtriton import ir
 from ..._core import builtin, int32, uint32, _unwrap_if_constexpr
@@ -110,3 +112,25 @@ def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonS
     cache_modifier = _semantic._str_to_load_cache_modifier(cache) if cache is not None else ir.CACHE_MODIFIER.NONE
 
     _semantic.builder.create_buffer_store(stored_value.handle, ptr.handle, offsets.handle, mask, cache_modifier)
+
+
+@builtin
+def dot(input, other, acc, layout, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None,
+        out_dtype=ttgl.float32, _semantic: GluonSemantic = None):
+    # this is the wrapper of triton.language.dot with one more parameter for layout
+    assert acc is not None, "For now, acc is required"
+    assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
+    if input_precision is None:
+        supports_tf32 = "tf32" in _semantic.builder.options.allowed_dot_input_precisions
+        input_precision = knobs.language.fp32_default or ("tf32" if (supports_tf32 and
+                                                                     (allow_tf32 or allow_tf32 is None)) else "ieee")
+
+    if out_dtype is None:
+        out_dtype = acc.dtype
+    layout = ttgl._unwrap_if_constexpr(layout)
+    input_precision = ttgl._unwrap_if_constexpr(input_precision)
+    out_dtype = ttgl._unwrap_if_constexpr(out_dtype)
+    max_num_imprecise_acc = ttgl._unwrap_if_constexpr(max_num_imprecise_acc)
+    acc = ttgl._unwrap_if_constexpr(acc)
+
+    return _semantic.dot(input, other, acc, layout, input_precision, max_num_imprecise_acc, out_dtype)
