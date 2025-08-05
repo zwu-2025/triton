@@ -304,6 +304,8 @@ def compile(src, target=None, options=None, _env_vars=None):
         filter_traceback(e)
         raise
 
+    assert module.verify()
+
     if ir_source:
         ir_filename = f"{file_name}.{src.ext}"
         metadata_group[ir_filename] = fn_cache_manager.put(module, ir_filename)

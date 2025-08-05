@@ -2337,6 +2337,8 @@ struct TritonGPUInferLayoutInterface
         return emitOptionalError(location, "Wrong opIdx");
       if (retEncoding != dotOpEnc.getParent())
         return emitOptionalError(location, "Incompatible parent encoding");
+    } else if (isa<BlockedEncodingAttr>(operandEncoding)) {
+      return success();
     } else
       return emitOptionalError(
           location, "Dot's a/b's encoding should be of DotOperandEncodingAttr");
