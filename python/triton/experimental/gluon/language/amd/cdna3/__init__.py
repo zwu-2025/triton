@@ -92,7 +92,7 @@ def buffer_load(ptr, offsets, mask=None, other=None, cache=None, _semantic=None)
 
 
 @builtin
-def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonSemantic = None):
+def buffer_store(stored_value, ptr, offsets, mask=None, cache=None, _semantic: GluonSemantic = None):
     """
     AMD buffer store a tensor directly to global memory via a scalar base pointer and a tensor of
     offsets instead of a tensor of pointers.
@@ -115,8 +115,8 @@ def buffer_store(stored_value, ptr, offsets, mask, cache=None, _semantic: GluonS
 
 
 @builtin
-def dot(input, other, acc, layout, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None,
-        out_dtype=ttgl.float32, _semantic: GluonSemantic = None):
+def dot(input, other, acc, input_precision=None, allow_tf32=None, max_num_imprecise_acc=None, out_dtype=ttgl.float32,
+        _semantic: GluonSemantic = None):
     # this is the wrapper of triton.language.dot with one more parameter for layout
     assert acc is not None, "For now, acc is required"
     assert input_precision is None or allow_tf32 is None, "Only one of input_precision and allow_tf32 can be specified"
@@ -127,10 +127,11 @@ def dot(input, other, acc, layout, input_precision=None, allow_tf32=None, max_nu
 
     if out_dtype is None:
         out_dtype = acc.dtype
-    layout = ttgl._unwrap_if_constexpr(layout)
+    # layout = ttgl._unwrap_if_constexpr(layout)
     input_precision = ttgl._unwrap_if_constexpr(input_precision)
     out_dtype = ttgl._unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = ttgl._unwrap_if_constexpr(max_num_imprecise_acc)
     acc = ttgl._unwrap_if_constexpr(acc)
 
-    return _semantic.dot(input, other, acc, layout, input_precision, max_num_imprecise_acc, out_dtype)
+    return _semantic.dot(input, other, acc, input_precision=input_precision,
+                         max_num_imprecise_acc=max_num_imprecise_acc, out_dtype=out_dtype, ret_type=acc.type)
