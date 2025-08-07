@@ -127,7 +127,7 @@ def dot(input, other, acc, input_precision=None, allow_tf32=None, max_num_imprec
 
     if out_dtype is None:
         out_dtype = acc.dtype
-    # layout = ttgl._unwrap_if_constexpr(layout)
+
     input_precision = ttgl._unwrap_if_constexpr(input_precision)
     out_dtype = ttgl._unwrap_if_constexpr(out_dtype)
     max_num_imprecise_acc = ttgl._unwrap_if_constexpr(max_num_imprecise_acc)
