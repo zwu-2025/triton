@@ -1,3 +1,5 @@
+#include "mlir/Dialect/Utils/ReshapeOpsUtils.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/Support/DebugStringHelper.h"
@@ -10,8 +12,11 @@
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/LogicalResult.h"
+
+#include <iostream>
 
 // Provide custom directive handlers for declarative assemblyFormat.
 // They must be visible before including the generated op classes.
@@ -517,10 +522,12 @@ LogicalResult MemDescReshapeOp::verify() {
   return success();
 }
 
-static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
-                                                   Attribute srcEnc,
+static LogicalResult inferMemDescReshapeOpEncoding(std::optional<Location> loc,
+                                                   MemDescType srcType,
                                                    ArrayRef<int64_t> dstShape,
                                                    Attribute &dstEnc) {
+  auto srcShape = srcType.getShape();
+  auto srcEnc = srcType.getEncoding();
   if (auto mmaEncoding = dyn_cast<NVMMASharedEncodingAttr>(srcEnc)) {
     // TODO: supporting reshape of CTA layouts is non-trivial.
     if (getNumCTAs(mmaEncoding) > 1)
@@ -554,6 +561,66 @@ static LogicalResult inferMemDescReshapeOpEncoding(ArrayRef<int64_t> srcShape,
     }
     return success();
   }
+
+  if (auto paddedEncoding = dyn_cast<PaddedSharedEncodingAttr>(srcEnc)) {
+    if (srcShape.size() > dstShape.size()) {
+      return emitOptionalError(
+          loc, "Shape collapase from src to dst is not supported");
+    }
+    if (srcShape.size() == dstShape.size()) {
+      dstEnc = srcEnc;
+      return success();
+    }
+
+    // For shape expansion:
+    // case1: src shape is [4, 8], the dstShape [4, 2, 4]
+    // getReassociationIndicesForCollapse will return [0, [1, 2]]
+    // which means, the dim1 in the source is expanded into [1, 2] in the target
+    // shape, if order is [1, 0], the new order is [2, 1, 0] if order is [0, 1],
+    // the new order is [0, 2, 1]
+    //
+    // case2: src shape is [4, 32, 32], and destShape is [4, 2, 16, 4, 8]
+    // getReassociationIndicesForCollapse will return [0, [1, 2], [3, 4]]
+    // which means the dim1 is mapped into [0, 1] and dim2 is mapped to [3, 4]
+    // if order is [2, 1, 0], the new order will be [4, 3, 2, 1, 0]
+
+    // For all cases, if getReassociationIndicesForCollapse return failure, then
+    // we return failure here.
+    auto ctx = srcType.getContext();
+    auto order = paddedEncoding.getOrder();
+    if (paddedEncoding.getCTALayout() !=
+        CTALayoutAttr::getDefault(ctx, order.size())) {
+      return emitOptionalError(
+          loc, "The cta layout order in padded shared encoding must be default "
+               "if it is used in memdesc reshape");
+    }
+
+    if (!srcType.hasStaticShape()) {
+      return mlir::emitOptionalError(loc, "Dynamic shape is not supported.");
+    }
+
+    auto maybeAssociated = mlir::getReassociationIndicesForReshape(
+        RankedTensorType::get(srcShape, srcType.getElementType()),
+        RankedTensorType::get(dstShape, srcType.getElementType()));
+    if (!maybeAssociated) {
+      return emitOptionalError(
+          loc, "srcShape canot be not associated with dstShape\n");
+    }
+
+    const auto &associated = *maybeAssociated;
+    std::vector<unsigned> newOrder;
+    for (auto dim : order) {
+      auto vec = associated[dim];
+      std::reverse(vec.begin(), vec.end());
+      newOrder.insert(newOrder.end(), vec.begin(), vec.end());
+    }
+
+    dstEnc = PaddedSharedEncodingAttr::get(
+        ctx, paddedEncoding.getIntervals(), paddedEncoding.getPaddings(),
+        newOrder, CTALayoutAttr::getDefault(ctx, newOrder.size()));
+    return success();
+  }
+
   return failure();
 }
 
@@ -566,8 +633,8 @@ LogicalResult MemDescReshapeOp::inferReturnTypes(
 
   Attribute dstEncoding;
   if (Attribute srcEnc = srcTy.getEncoding()) {
-    if (failed(inferMemDescReshapeOpEncoding(srcTy.getShape(), srcEnc, dstShape,
-                                             dstEncoding)))
+    if (failed(
+            inferMemDescReshapeOpEncoding(loc, srcTy, dstShape, dstEncoding)))
       return failure();
   }
 

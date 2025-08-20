@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include "mlir/AsmParser/AsmParser.h"
+#include "mlir/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/StrUtil.h"
@@ -515,6 +516,65 @@ public:
         /*isTransposed=*/true, ctaLayout, std::nullopt);
   }
 };
+
+class MemDescReshapOpTest : public ::testing::Test {
+public:
+  MemDescReshapOpTest() { ctx.getOrLoadDialect<TritonGPUDialect>(); }
+
+protected:
+  MLIRContext ctx;
+};
+
+TEST_F(MemDescReshapOpTest, InferReturnTypeWithoutCollapse) {
+  auto ctaLayout = triton::gpu::CTALayoutAttr::getDefault(&ctx, 2);
+  auto srcEnc = PaddedSharedEncodingAttr::get(
+      &ctx, ArrayRef<unsigned>{2}, ArrayRef<unsigned>{1},
+      ArrayRef<unsigned>{1, 0}, ctaLayout);
+
+  ArrayRef<int64_t> srcShape = {8, 8};
+  auto elemTy = mlir::parseType("f16", &ctx);
+  Attribute sharedMemorySpace = triton::gpu::SharedMemorySpaceAttr::get(&ctx);
+  auto srcTy =
+      MemDescType::get(srcShape, elemTy, srcEnc, sharedMemorySpace, true);
+
+  for (auto [newShape, newOrder] : llvm::zip(
+           SmallVector<SmallVector<int64_t>>{
+               {4, 16}, {2, 4, 8}, {1, 64}, {8, 1, 8}},
+           SmallVector<SmallVector<unsigned>>{
+               {1, 0}, {2, 1, 0}, {1, 0}, {2, 1, 0}})) {
+    MemDescType dstType;
+    EXPECT_TRUE(MemDescReshapeOp::inferReturnTypes(&ctx, std::nullopt, srcTy,
+                                                   newShape, dstType)
+                    .succeeded());
+    assert(dstType.getEncoding());
+    auto dstEnc = dstType.getEncoding();
+    auto expectedDstEnc = PaddedSharedEncodingAttr::get(
+        &ctx, srcEnc.getIntervals(), srcEnc.getPaddings(), newOrder,
+        CTALayoutAttr::getDefault(&ctx, newOrder.size()));
+
+    EXPECT_EQ(dstEnc, expectedDstEnc);
+  }
+
+  // src_shape and dst_shape cannot be associated.
+  MemDescType dstType;
+  EXPECT_TRUE(MemDescReshapeOp::inferReturnTypes(&ctx, std::nullopt, srcTy,
+                                                 ArrayRef<int64_t>{2, 8, 4},
+                                                 dstType)
+                  .failed());
+
+  // None default CTALayout is not supported.
+  srcEnc = PaddedSharedEncodingAttr::get(
+      &ctx, ArrayRef<unsigned>{2}, ArrayRef<unsigned>{1},
+      ArrayRef<unsigned>{1, 0},
+      CTALayoutAttr::get(&ctx, SmallVector<unsigned>(2, 2),
+                         SmallVector<unsigned>(2, 2),
+                         SmallVector<unsigned>{1, 0}));
+  srcTy = MemDescType::get(srcShape, elemTy, srcEnc, sharedMemorySpace, true);
+  EXPECT_TRUE(MemDescReshapeOp::inferReturnTypes(&ctx, std::nullopt, srcTy,
+                                                 ArrayRef<int64_t>{2, 4, 8},
+                                                 dstType)
+                  .failed());
+}
 
 class LinearEncodingTest : public ::testing::Test {
 public:
