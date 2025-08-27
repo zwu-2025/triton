@@ -271,6 +271,48 @@ class HIPBackend(BaseBackend):
         passes.gluon.add_canonicalizer(pm)
         passes.ttgpuir.add_combine_tensor_select_and_if(pm)
 
+        passes.ttgpuir.add_coalesce(pm)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_optimize_thread_locality(pm)
+
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        amd.passes.ttgpuir.add_optimize_epilogue(pm)
+        amd.passes.ttgpuir.add_optimize_dot_operands(pm, options.arch)
+        amd.passes.ttgpuir.add_hoist_layout_conversions(pm)
+
+        passes.ttgpuir.add_fuse_nested_loops(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.ttir.add_triton_licm(pm)
+        passes.common.add_canonicalizer(pm)
+
+        global_prefetch = knobs.amd.global_prefetch
+        local_prefetch = knobs.amd.local_prefetch
+        use_async_copy = knobs.amd.use_async_copy
+        use_block_pingpong = is_pingpong_schedule_enabled(options.arch, use_async_copy)
+
+        amd.passes.ttgpuir.add_stream_pipeline(pm, options.num_stages, global_prefetch, local_prefetch, use_async_copy,
+                                               use_block_pingpong)
+        if use_async_copy:
+            amd.passes.ttgpuir.add_coalesce_async_copy(pm, options.arch)
+        passes.common.add_canonicalizer(pm)
+        if options.schedule_hint.lower() != "none":
+            amd.passes.ttgpuir.insert_instruction_sched_hints(pm, options.schedule_hint)
+        passes.ttgpuir.add_remove_layout_conversions(pm)
+        passes.ttgpuir.add_reduce_data_duplication(pm)
+        if is_in_thread_transpose_enabled(options.arch):
+            amd.passes.ttgpuir.add_in_thread_transpose(pm)
+            passes.ttgpuir.add_remove_layout_conversions(pm)
+        amd.passes.ttgpuir.add_reorder_instructions(pm)
+        if use_block_pingpong and options.num_stages > 1:
+            amd.passes.ttgpuir.add_block_pingpong(pm, options.num_stages)
+
+        amd.passes.ttgpuir.add_fold_true_cmpi(pm)
+        passes.common.add_canonicalizer(pm)
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
+        if use_async_copy:
+            amd.passes.ttgpuir.add_update_async_wait_count(pm, options.arch)
+
         pm.run(mod)
         return mod
 
