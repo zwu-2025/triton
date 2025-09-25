@@ -65,6 +65,21 @@ void annotateLocalLoadsSyncedViaAsyncWait(ModuleOp mod) {
     loadOp->setAttr(syncedViaAsyncWaitAttrName,
                     BoolAttr::get(ctx, isSyncedViaAsyncWait));
   }
+
+  SmallVector<triton::amdgpu::LdsLoadOp> ldsLoads;
+  mod->walk([&](triton::amdgpu::LdsLoadOp localLoadOp) {
+    ldsLoads.emplace_back(localLoadOp);
+  });
+
+  for (auto &loadOp : ldsLoads) {
+    auto token = loadOp.getToken();
+    if (loadOp->hasAttr(syncedViaAsyncWaitAttrName))
+      continue;
+
+    bool isSyncedViaAsyncWait = token && comesFromAsyncWait(token);
+    loadOp->setAttr(syncedViaAsyncWaitAttrName,
+                    BoolAttr::get(ctx, isSyncedViaAsyncWait));
+  }
 }
 
 bool isSyncedViaAsyncWait(Operation *op) {

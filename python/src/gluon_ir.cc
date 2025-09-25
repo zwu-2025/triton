@@ -543,6 +543,12 @@ void init_gluon_ir(py::module &&m) {
            [](GluonOpBuilder &self, Type resultTy, Value memDesc) -> Value {
              return self.create<ttg::LocalLoadOp>(resultTy, memDesc);
            })
+      .def("create_lds_load",
+           [](GluonOpBuilder &self, Type resultTy, Value memDesc, Value offsets,
+              Value mask) -> Value {
+             return self.create<ttag::LdsLoadOp>(resultTy, memDesc, offsets,
+                                                 mask, Value());
+           })
       .def("get_shared_bank_conflicts",
            [](GluonOpBuilder &self, Attribute regLayoutAttr,
               Attribute sharedLayoutAttr, std::vector<int64_t> &shape,

@@ -9,7 +9,7 @@ from ..._core import builtin, _unwrap_if_constexpr
 if TYPE_CHECKING:
     from ..._semantic import GluonSemantic
 
-__all__ = ["buffer_atomic_rmw", "buffer_load", "buffer_store", "mfma"]
+__all__ = ["buffer_atomic_rmw", "buffer_load", "buffer_store", "lds_load", "mfma"]
 
 _atomic_op_str_to_op = {
     "smax": ir.ATOMIC_OP.MAX, "smin": ir.ATOMIC_OP.MIN, "umax": ir.ATOMIC_OP.UMAX, "umin": ir.ATOMIC_OP.UMIN, "fadd":
@@ -178,3 +178,17 @@ def buffer_atomic_rmw(op, ptr, offsets, value, mask=None, sem=None, scope=None, 
 
     return _buffer_atomic_rmw_impl(op, ptr, offsets, value, "cdna3", mask=mask, sem=sem, scope=scope,
                                    _semantic=_semantic)
+
+
+@builtin
+def lds_load(mem_desc, offsets, mask=None, _semantic=None):
+    mask = _unwrap_if_constexpr(mask)
+    if mask is not None:
+        offsets, mask = _semantic.broadcast_impl_value(offsets, mask)
+
+    mask = mask.handle if mask is not None else ir.value()
+
+    ret_ty = offsets.type.with_element_ty(mem_desc.dtype)
+    builder = _semantic.builder
+    handle = builder.create_lds_load(ret_ty.to_ir(builder), mem_desc.handle, offsets.handle, mask)
+    return ttgl.tensor(handle, ret_ty)

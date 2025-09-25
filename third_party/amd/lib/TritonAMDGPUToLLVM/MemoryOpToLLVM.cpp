@@ -4,6 +4,7 @@
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
+#include "triton/Dialect/TritonGPU/IR/Attributes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Utility.h"
 
 using ::mlir::triton::gpu::AMDMfmaEncodingAttr;
@@ -256,6 +257,75 @@ private:
   const AMD::TargetInfo &targetInfo;
 };
 
+struct LdsLoadOpConversion
+    : public ConvertOpToLLVMPattern<triton::amdgpu::LdsLoadOp> {
+  LdsLoadOpConversion(LLVMTypeConverter &converter,
+                      const AMD::TargetInfo &targetInfo)
+      : ConvertOpToLLVMPattern(converter), targetInfo(targetInfo) {}
+
+  LogicalResult
+  matchAndRewrite(triton::amdgpu::LdsLoadOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    MLIRContext *ctx = rewriter.getContext();
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+
+    auto dstTy = cast<RankedTensorType>(op.getType());
+    auto regLayout = triton::gpu::toLinearLayout(dstTy);
+    assert(dstTy.getRank() == 2);
+
+    auto llvmElemTy = typeConverter->convertType(dstTy.getElementType());
+
+    Value offsets = adaptor.getOffsets();
+    SmallVector<Value> offsetElems = unpackLLElements(loc, offsets, rewriter);
+
+    Value mask = adaptor.getMask();
+    SmallVector<Value> maskElems(offsetElems.size(), b.i1_val(1));
+    if (mask)
+      maskElems = unpackLLElements(loc, mask, rewriter);
+
+    auto smemObj = LLVM::getSharedMemoryObjectFromStruct(loc, adaptor.getSrc(),
+                                                         llvmElemTy, rewriter);
+    auto smemBase = smemObj.getBase();
+    int numElems = regLayout.getInDimSize(str_attr("register"));
+    assert(numElems == offsetElems.size());
+
+    Type vecTy = LLVM::getVectorType(llvmElemTy, 1);
+    auto smemPtrTy = ptr_ty(ctx, 3);
+    auto noPaddingOffset = [](Value v) { return v; };
+
+    SmallVector<Value> loadedVals;
+    for (auto i = 0; i < numElems; i++) {
+      auto offset = offsetElems[i];
+      auto pred = maskElems[i];
+      // For now, the swizzled layout is no change layout smemOffset =
+      // b.xor_(smemOffset, offset);
+      auto smemOffset =
+          b.mul(offset, b.i32_val(llvmElemTy.getIntOrFloatBitWidth() / 8));
+      auto addr = b.gep(smemPtrTy, i8_ty, smemBase, noPaddingOffset(smemOffset),
+                        LLVM::GEPNoWrapFlags::inbounds);
+
+      Value loadedVec = targetInfo.loadDShared(rewriter, loc, addr,
+                                               std::nullopt, vecTy, pred, op);
+
+      Value vecIdx = createIndexAttrConstant(
+          rewriter, loc, getTypeConverter()->getIndexType(), 0);
+      Value loaded = b.extract_element(llvmElemTy, loadedVec, vecIdx);
+      loadedVals.push_back(loaded);
+    }
+
+    Type structTy = typeConverter->convertType(dstTy);
+    Value resultStruct =
+        packLLElements(loc, getTypeConverter(), loadedVals, rewriter, structTy);
+    rewriter.replaceOp(op, {resultStruct});
+
+    return success();
+  }
+
+private:
+  const AMD::TargetInfo &targetInfo;
+};
+
 } // namespace
 
 void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
@@ -267,4 +337,6 @@ void mlir::triton::AMD::populateMemoryOpToLLVMPatterns(
   patterns.add<
       TransLocalLoadOpConversion<triton::amdgpu::LocalLoadPackedTransposedOp>>(
       typeConverter, targetInfo, benefit);
+
+  patterns.add<LdsLoadOpConversion>(typeConverter, targetInfo);
 }

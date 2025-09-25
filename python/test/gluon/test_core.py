@@ -1114,3 +1114,106 @@ def test_dot_fma():
     out = torch.empty((B, B), dtype=torch.float32, device="cuda")
     kernel[(1, )](a, b, c, out)
     torch.testing.assert_close(out, torch.addmm(c, a, b), atol=1e-2, rtol=1e-2)
+
+
+@pytest.mark.skipif(not is_hip_cdna4() and not is_hip_cdna3(), reason="Requires CDNA3 or CDNA4")
+def test_lds_load():
+
+    @gluon.jit
+    def lds_load_kernel(in_ptr, offs_ptr, out_ptr, layout: ttgl.constexpr, swizzled: ttgl.constexpr,
+                        BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout))
+        offs = offs_m[:, None] * BLOCK_N + offs_k[None, :]
+
+        # load bias from global memory into shared memory
+        smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], swizzled)
+        ttgl.amd.cdna4.async_copy.buffer_load_to_shared(dest=smem, ptr=in_ptr, offsets=offs)
+
+        # load offsets from the global memory
+        offsets = ttgl.amd.cdna3.buffer_load(ptr=offs_ptr, offsets=offs)
+
+        # load from shared memory into riester with offsets
+        a = ttgl.amd.cdna3.lds_load(smem, offsets=offsets)
+
+        # write back to global memory
+        ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=out_ptr, offsets=offs)
+
+    elem_type = torch.bfloat16
+    num_warps = 4
+    BLOCK_M = 32
+    BLOCK_N = 64
+    input = torch.randn((BLOCK_M, BLOCK_N), device="cuda", dtype=elem_type)
+    input_offsets = torch.randint(0, BLOCK_M * BLOCK_N, (BLOCK_M, BLOCK_N), dtype=torch.int32, device="cuda")
+    output = torch.empty_like(input)
+
+    blocked = ttgl.BlockedLayout([1, 8], [8, 8], [1, num_warps], [1, 0])
+    swizzled = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    lds_load_kernel[(1, )](input, input_offsets, output, blocked, swizzled, BLOCK_M, BLOCK_N, num_warps=num_warps)
+
+    new_row_index = (input_offsets // input.size(1)).long()
+    new_col_index = (input_offsets % input.size(1)).long()
+
+    torch_output = input[new_row_index, new_col_index]
+    assert (output == torch_output).all()
+
+
+@pytest.mark.skipif(not is_hip_cdna4() and not is_hip_cdna3(), reason="Requires CDNA3 or CDNA4")
+def test_lds_masked_load():
+
+    @gluon.jit
+    def lds_mask(in_ptr, offs_ptr, mask_ptr, out_ptr, layout: ttgl.constexpr, swizzled: ttgl.constexpr,
+                 BLOCK_M: ttgl.constexpr, BLOCK_N: ttgl.constexpr):
+
+        offs_m = ttgl.arange(0, BLOCK_M, layout=ttgl.SliceLayout(1, layout))
+        offs_k = ttgl.arange(0, BLOCK_N, layout=ttgl.SliceLayout(0, layout))
+        offs = offs_m[:, None] * BLOCK_N + offs_k[None, :]
+
+        # load bias from ttglobal memory into shared memory
+        smem = ttgl.allocate_shared_memory(in_ptr.dtype.element_ty, [BLOCK_M, BLOCK_N], swizzled)
+        ttgl.amd.cdna4.async_copy.buffer_load_to_shared(dest=smem, ptr=in_ptr, offsets=offs)
+
+        # load offsets from the global memory
+        offsets = ttgl.amd.cdna3.buffer_load(ptr=offs_ptr, offsets=offs)
+        mask = ttgl.amd.cdna3.buffer_load(ptr=mask_ptr, offsets=offs)
+        mask = mask.to(ttgl.int1)
+
+        # load from shared memory into riester with offsets
+        a = ttgl.amd.cdna3.lds_load(smem, offsets=offsets, mask=mask)
+
+        # write back to global memory
+        ttgl.amd.cdna3.buffer_store(stored_value=a, ptr=out_ptr, offsets=offs)
+
+    elem_type = torch.float16
+    elem_type = torch.int32
+    elem_type = torch.bfloat16
+    num_warps = 4
+    BLOCK_M = 32
+    BLOCK_N = 64
+
+    #the input value is from [0.01, 1.01]
+    input = torch.randn((BLOCK_M, BLOCK_N), device="cuda", dtype=elem_type) + 0.01
+
+    input_offsets = torch.randint(0, BLOCK_M * BLOCK_N, (BLOCK_M, BLOCK_N), dtype=torch.int32, device="cuda")
+    input_mask = torch.randint(0, 2, (BLOCK_M, BLOCK_N), dtype=torch.int8, device="cuda")
+
+    # the triton ouput is initialized with -1.
+    # in the kernel, the value is from input if mask is 1 and 0 from the impl of TargetInfo::loadDShared
+    output = torch.full((BLOCK_M, BLOCK_N), -1, device="cuda", dtype=elem_type)
+
+    layout = ttgl.BlockedLayout([1, 8], [8, 8], [1, num_warps], [1, 0])
+    swizzled = ttgl.SwizzledSharedLayout(vec=1, per_phase=1, max_phase=1, order=[1, 0])
+    lds_mask[(1, )](input, input_offsets, input_mask, output, layout, swizzled, BLOCK_M, BLOCK_N, num_warps=num_warps)
+
+    for i in range(BLOCK_M):
+        for j in range(BLOCK_N):
+            new_i = input_offsets[i, j] // BLOCK_N
+            new_j = input_offsets[i, j] % BLOCK_N
+            expected = input[new_i, new_j]
+            actual = output[i, j]
+
+            if input_mask[i, j] == 1:
+                assert expected == actual
+            else:
+                assert actual == 0.0

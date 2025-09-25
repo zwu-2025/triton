@@ -506,6 +506,12 @@ applyLinearLayout(Location loc, RewriterBase &rewriter,
                   const LinearLayout &layout,
                   ArrayRef<std::pair<StringAttr, Value>> indices);
 
+SmallVector<SmallVector<std::pair<StringAttr, Value>>>
+applyLinearLayoutVec(Location loc, RewriterBase &rewriter,
+                     const LinearLayout &layout,
+                     ArrayRef<std::pair<StringAttr, Value>> indices,
+                     ArrayRef<uint32_t> registers);
+
 SmallVector<SmallVector<unsigned>> emitOffsetForLayout(Attribute layout,
                                                        RankedTensorType type);
 

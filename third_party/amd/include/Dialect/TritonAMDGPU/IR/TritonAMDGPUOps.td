@@ -322,6 +322,27 @@ def BufferLoadOp : TT_AMDGPU_Op<"buffer_load", [
     }];
 }
 
+def LdsLoadOp : TT_AMDGPU_Op<"lds_load", [LocalLoadTrait, AttrSizedOperandSegments,
+  TypesMatchWith<"result and offsets have the same shape", "result", "offsets", "getI32SameShape($_self)">,
+]>{
+    let summary = "Load from a shared memory, and a tensor offset";
+    let description = [{load from lds}];
+    let arguments = (ins
+      Arg<TTG_MemDescType, "", [MemRead<SharedMemory>]>:$src,
+      I32Tensor:$offsets,
+      Optional<TT_BoolTensor>:$mask,
+      Optional<TTG_AsyncToken>:$token
+    );
+    let results = (outs TT_Tensor:$result);
+
+  let builders = [
+      OpBuilder<(ins "Type":$retType, "Value":$src, "Value":$offsets),
+      [{
+      build($_builder, $_state, retType, src, offsets, /*mask*/static_cast<mlir::Value>(nullptr), static_cast<mlir::Value>(nullptr));
+      }]>];
+
+}
+
 //===----------------------------------------------------------------------===//
 // BufferLoadToLocalOp
 //===----------------------------------------------------------------------===//
