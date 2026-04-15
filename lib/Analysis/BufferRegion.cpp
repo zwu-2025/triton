@@ -1,5 +1,6 @@
 #include "triton/Analysis/BufferRegion.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Dialect/Triton/IR/Utility.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/LinearLayoutConversions.h"
@@ -266,6 +267,16 @@ LogicalResult BufferRegionAnalysis::visitOperation(
       propagateIfChanged(r, r->join(regionInfo));
     }
     return success();
+  }
+  if (auto selectOp = dyn_cast<arith::SelectOp>(op)) {
+    if (isa<ttg::MemDescType>(selectOp.getType())) {
+      regionInfo =
+          RegionInfo::join(operands[1]->getValue(), operands[2]->getValue());
+      for (auto *r : results) {
+        propagateIfChanged(r, r->join(regionInfo));
+      }
+      return success();
+    }
   }
   // "Passthrough" ops that don't modify the buffer regions.
   if (isa<ttg::MemDescTransOp, ttg::MemDescReshapeOp,
