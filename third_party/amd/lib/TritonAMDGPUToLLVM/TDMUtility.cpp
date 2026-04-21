@@ -15,8 +15,8 @@ namespace mlir::LLVM::AMD {
 namespace {
 
 // Helper to decode a value spanning two 32-bit words
-static Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
-                              ArrayRef<Value> group, int startIdx) {
+Value decode48BitValue(RewriterBase &rewriter, TritonLLVMOpBuilder &b,
+                       ArrayRef<Value> group, int startIdx) {
   Value low = b.lshr(group[startIdx], b.i32_val(16));
   Value high = b.shl(group[startIdx + 1], b.i32_val(16));
   return b.or_(low, high);
@@ -862,6 +862,8 @@ void fillTDMDescriptorForGatherScatter(
   }
 }
 
+namespace {
+
 // Compute how many elements each partition buffer advances between consecutive
 // TDM instruction slices, accounting for padding if present.
 //
@@ -869,7 +871,7 @@ void fillTDMDescriptorForGatherScatter(
 // instructions, each instruction writes a "slice" of data into each partition
 // buffer.  We need to know the padded size of that slice so the next
 // instruction can offset its LDS pointer correctly.
-static int64_t computePerPartitionSliceStride(
+int64_t computePerPartitionSliceStride(
     ArrayRef<int64_t> blockShape, unsigned partitionDim,
     int64_t sliceExtentPerPartition, unsigned numPartitions,
     triton::gpu::PartitionedSharedEncodingAttr partitionedEnc) {
@@ -900,16 +902,17 @@ static int64_t computePerPartitionSliceStride(
 
 // Emit a single TDM intrinsic (load or store) for the given block shape.
 // This handles both the 2D (d2 intrinsic) and >2D (full intrinsic) cases.
-static void
-emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
-                 const LLVMTypeConverter *typeConverter, ArrayRef<Value> desc,
-                 size_t numDims, Type elementType,
-                 SmallVector<int64_t> effectiveBlockShape, int numWarps,
-                 unsigned padInterval, unsigned padAmount,
-                 SmallVector<Value> globalOffset, ArrayRef<Value> instrDstPtrs,
-                 Value pred, Value multicastMask, Value barrier,
-                 const triton::LinearLayout &instrSharedLayout, Value ctaId,
-                 bool isLoad, ArrayRef<unsigned> warpsPerCTA) {
+void emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
+                      const LLVMTypeConverter *typeConverter,
+                      ArrayRef<Value> desc, size_t numDims, Type elementType,
+                      SmallVector<int64_t> effectiveBlockShape, int numWarps,
+                      unsigned padInterval, unsigned padAmount,
+                      SmallVector<Value> globalOffset,
+                      ArrayRef<Value> instrDstPtrs, Value pred,
+                      Value multicastMask, Value barrier,
+                      const triton::LinearLayout &instrSharedLayout,
+                      Value ctaId, bool isLoad,
+                      ArrayRef<unsigned> warpsPerCTA) {
   auto b = TritonLLVMOpBuilder(loc, rewriter);
   auto v8i32Ty = VectorType::get(8, rewriter.getI32Type());
   Value group4Zero = LLVM::ZeroOp::create(rewriter, loc, v8i32Ty);
@@ -960,6 +963,8 @@ emitTDMIntrinsic(RewriterBase &rewriter, Location loc,
         {group0, group1, group2Zero, group3Zero, group4Zero, b.i32_val(0)});
   }
 }
+
+} // namespace
 
 // Emit TDM load/store, potentially split into multiple instructions for
 // partitioned shared memory.
